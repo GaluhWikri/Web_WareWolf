@@ -9,92 +9,153 @@ import { GameSettings } from './types/game';
 type AppState = 'home' | 'join' | 'lobby' | 'game';
 
 function App() {
-  const [view, setView] = useState<AppState>('home');
+  const [currentState, setCurrentState] = useState<AppState>('home');
+  const [joinError, setJoinError] = useState<string>('');
   const {
-    room,
+    players,
     currentPlayer,
-    error,
-    createRoom,
-    joinRoom,
-    toggleReady,
-    startGame,
-    sendMessage,
-    votePlayer,
-    useAbility,
-    leaveRoom
+    gameState,
+    chatMessages,
+    currentRoomCode,
+    addPlayer,
+    removePlayer,
+    togglePlayerReady,
+    assignRoles,
+    voteForPlayer,
+    addChatMessage,
+    useNightAbility,
+    setCurrentPlayer,
+    joinRoom
   } = useGameState();
 
-  const handleCreateGame = async (playerName: string) => {
-    await createRoom(playerName);
-    setView('lobby');
-  };
-
-  const handleJoinGame = async (playerName: string, roomCode: string) => {
-    await joinRoom(roomCode, playerName);
-    if (!error) {
-        setView('lobby');
+  const handleCreateGame = () => {
+    // Create host player
+    const result = addPlayer('Host', true);
+    if (result && typeof result === 'object' && 'player' in result) {
+      setCurrentPlayer(result.player);
+      setCurrentState('lobby');
     }
   };
-  
-  // Update view berdasarkan state dari hook
-  React.useEffect(() => {
-    if (room && room.gameState.phase !== 'lobby' && view !== 'game') {
-        setView('game');
-    } else if (room && room.gameState.phase === 'lobby' && view !== 'lobby') {
-        setView('lobby');
-    } else if (!room && view !== 'home' && view !== 'join') {
-        setView('home');
-    }
-  }, [room, view]);
 
-  const renderContent = () => {
-    switch (view) {
-      case 'join':
-        return <JoinGame onBack={() => setView('home')} onJoin={handleJoinGame} error={error} />;
+  const handleJoinGame = (playerName: string, roomCode: string) => {
+    setJoinError('');
+    
+    // Create player object
+    const newPlayer = {
+      id: Date.now().toString(),
+      name: playerName,
+      role: 'villager' as const,
+      isAlive: true,
+      isHost: false,
+      isReady: false,
+      votes: 0
+    };
+
+    // Try to join the room
+    const success = joinRoom(roomCode, newPlayer);
+    
+    if (success) {
+      setCurrentPlayer(newPlayer);
+      setCurrentState('lobby');
+    } else {
+      // Set specific error message
+      setJoinError('Room not found, is full, name taken, or game already started');
+    }
+  };
+
+  const handleStartGame = (settings: GameSettings) => {
+    assignRoles(settings);
+    setCurrentState('game');
+  };
+
+  const handleVote = (targetId: string) => {
+    if (currentPlayer) {
+      voteForPlayer(currentPlayer.id, targetId);
+    }
+  };
+
+  const handleUseAbility = (targetId: string) => {
+    if (currentPlayer && gameState.phase === 'night') {
+      const abilityType = currentPlayer.role === 'werewolf' ? 'werewolf' :
+                          currentPlayer.role === 'doctor' ? 'doctor' :
+                          currentPlayer.role === 'seer' ? 'seer' : null;
       
-      case 'lobby':
-        return room && currentPlayer ? (
-          <GameLobby 
-            players={room.players}
-            currentPlayer={currentPlayer}
-            roomCode={room.code}
-            onStartGame={startGame}
-            onToggleReady={() => toggleReady()}
-            onRemovePlayer={() => { /* Implement if needed via socket */ }}
-          />
-        ) : <div>Loading lobby...</div>;
+      if (abilityType) {
+        useNightAbility(currentPlayer.id, targetId, abilityType);
+      }
+    }
+  };
 
-      case 'game':
-        return room && currentPlayer ? (
-            <GameRoom
-                players={room.players}
-                currentPlayer={currentPlayer}
-                gameState={room.gameState}
-                chatMessages={room.chatMessages}
-                onVote={votePlayer}
-                onUseAbility={useAbility}
-                onSendMessage={sendMessage}
-                onEndGame={() => { leaveRoom(); setView('home'); }}
-            />
-        ) : <div>Loading game...</div>;
-        
-      default: // home
-        return (
-          <HomePage 
-            // Modifikasi HomePage untuk menerima nama, atau buat state baru di sini
-            onCreateGame={() => {
-                const name = prompt("Masukkan nama Anda:");
-                if(name) handleCreateGame(name);
-            }}
-            onJoinGame={() => setView('join')}
-          />
-        );
+  const handleSendMessage = (message: string) => {
+    if (currentPlayer) {
+      const messageType = gameState.phase === 'night' && currentPlayer.role === 'werewolf' 
+        ? 'werewolf' 
+        : 'player';
+      addChatMessage(currentPlayer.name, message, messageType);
+    }
+  };
+
+  const handleEndGame = () => {
+    setCurrentState('home');
+  };
+
+  const handleBack = () => {
+    setCurrentState('home');
+    setJoinError('');
+  };
+
+  const handleToggleReady = (playerId: string) => {
+    togglePlayerReady(playerId);
+  };
+
+  const handleRemovePlayer = (playerId: string) => {
+    const playerToRemove = players.find(p => p.id === playerId);
+    if (playerToRemove) {
+      removePlayer(playerId);
+      addChatMessage('System', `${playerToRemove.name} left the game.`, 'system');
     }
   };
 
   return (
     <div className="min-h-screen">
-      {renderContent()}
+      {currentState === 'home' && (
+        <HomePage 
+          onCreateGame={handleCreateGame}
+          onJoinGame={() => setCurrentState('join')}
+        />
+      )}
+      
+      {currentState === 'join' && (
+        <JoinGame 
+          onBack={handleBack}
+          onJoin={handleJoinGame}
+          error={joinError}
+        />
+      )}
+      
+      {currentState === 'lobby' && (
+        <GameLobby 
+          players={players}
+          currentPlayer={currentPlayer}
+          roomCode={currentRoomCode}
+          onStartGame={handleStartGame}
+          onToggleReady={handleToggleReady}
+          onRemovePlayer={handleRemovePlayer}
+        />
+      )}
+      
+      {currentState === 'game' && (
+        <GameRoom 
+          players={players}
+          currentPlayer={currentPlayer}
+          gameState={gameState}
+          chatMessages={chatMessages}
+          onVote={handleVote}
+          onUseAbility={handleUseAbility}
+          onSendMessage={handleSendMessage}
+          onEndGame={handleEndGame}
+        />
+      )}
     </div>
   );
 }
