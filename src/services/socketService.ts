@@ -17,7 +17,7 @@ class SocketService {
     return new Promise((resolve, reject) => {
       const url = serverUrl || 
         (process.env.NODE_ENV === 'production' 
-          ? 'railway link -p 222fe146-5317-4eca-9152-e311d18c22f4p' 
+          ? 'webwarewolf-production.up.railway.app' 
           : 'http://localhost:3001');
 
       this.socket = io(url, {

@@ -13,7 +13,7 @@ const server = http.createServer(app);
 // CORS configuration for production
 const corsOptions = {
   origin: process.env.NODE_ENV === 'production' 
-    ? ['https://your-frontend-domain.com', 'https://werewolf-game.vercel.app']
+    ? ['https://web-warewolf.vercel.app']
     : ['http://localhost:5173', 'http://localhost:3000'],
   credentials: true
 };
