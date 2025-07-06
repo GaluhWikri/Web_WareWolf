@@ -9,141 +9,153 @@ import { GameSettings } from './types/game';
 type AppState = 'home' | 'join' | 'lobby' | 'game';
 
 function App() {
-  const [appState, setAppState] = useState<AppState>('home');
+  const [currentState, setCurrentState] = useState<AppState>('home');
   const [joinError, setJoinError] = useState<string>('');
-  
-  // Menggunakan hook useGameState yang sudah diperbarui
   const {
     players,
     currentPlayer,
     gameState,
     chatMessages,
     currentRoomCode,
-    createRoom, // Menggantikan addPlayer untuk host
-    joinRoom,
-    leaveRoom,
-    togglePlayerReady, // Sekarang tidak perlu argumen
-    startGame, // Menggantikan assignRoles
-    addChatMessage, // Sekarang hanya perlu 1 argumen
+    addPlayer,
+    removePlayer,
+    togglePlayerReady,
+    assignRoles,
     voteForPlayer,
+    addChatMessage,
     useNightAbility,
+    setCurrentPlayer,
+    joinRoom
   } = useGameState();
 
-  const handleCreateGame = async (playerName: string = 'Host') => {
-    const { success, error } = await createRoom(playerName);
-    if (success) {
-      setAppState('lobby');
-    } else {
-      // Handle error jika pembuatan room gagal
-      console.error("Failed to create room:", error);
+  const handleCreateGame = () => {
+    // Create host player
+    const result = addPlayer('Host', true);
+    if (result && typeof result === 'object' && 'player' in result) {
+      setCurrentPlayer(result.player);
+      setCurrentState('lobby');
     }
   };
 
-  const handleJoinGame = async (playerName: string, roomCode: string) => {
+  const handleJoinGame = (playerName: string, roomCode: string) => {
     setJoinError('');
-    const { success, error } = await joinRoom(roomCode, playerName);
+    
+    // Create player object
+    const newPlayer = {
+      id: Date.now().toString(),
+      name: playerName,
+      role: 'villager' as const,
+      isAlive: true,
+      isHost: false,
+      isReady: false,
+      votes: 0
+    };
+
+    // Try to join the room
+    const success = joinRoom(roomCode, newPlayer);
     
     if (success) {
-      setAppState('lobby');
+      setCurrentPlayer(newPlayer);
+      setCurrentState('lobby');
     } else {
-      setJoinError(error || 'Failed to join room. Please check the code and player name.');
+      // Set specific error message
+      setJoinError('Room not found, is full, name taken, or game already started');
     }
   };
 
   const handleStartGame = (settings: GameSettings) => {
-    startGame(settings);
-    setAppState('game');
+    assignRoles(settings);
+    setCurrentState('game');
   };
 
   const handleVote = (targetId: string) => {
-    voteForPlayer(targetId);
+    if (currentPlayer) {
+      voteForPlayer(currentPlayer.id, targetId);
+    }
   };
 
   const handleUseAbility = (targetId: string) => {
-    useNightAbility(targetId);
+    if (currentPlayer && gameState.phase === 'night') {
+      const abilityType = currentPlayer.role === 'werewolf' ? 'werewolf' :
+                          currentPlayer.role === 'doctor' ? 'doctor' :
+                          currentPlayer.role === 'seer' ? 'seer' : null;
+      
+      if (abilityType) {
+        useNightAbility(currentPlayer.id, targetId, abilityType);
+      }
+    }
   };
 
   const handleSendMessage = (message: string) => {
-    addChatMessage(message);
+    if (currentPlayer) {
+      const messageType = gameState.phase === 'night' && currentPlayer.role === 'werewolf' 
+        ? 'werewolf' 
+        : 'player';
+      addChatMessage(currentPlayer.name, message, messageType);
+    }
   };
 
   const handleEndGame = () => {
-    leaveRoom();
-    setAppState('home');
+    setCurrentState('home');
   };
 
   const handleBack = () => {
-    setAppState('home');
+    setCurrentState('home');
     setJoinError('');
   };
 
-  const handleToggleReady = () => {
-    togglePlayerReady();
-  };
-  
-  // CATATAN: Fungsi remove player oleh host belum diimplementasikan di server
-  // Anda perlu menambahkan event 'remove-player' di server.js
-  const handleRemovePlayer = (playerId: string) => {
-    console.warn(`Fungsi remove-player untuk ${playerId} belum diimplementasikan di backend.`);
-    // Logika untuk emit 'remove-player' ke server akan ditambahkan di sini
+  const handleToggleReady = (playerId: string) => {
+    togglePlayerReady(playerId);
   };
 
-  const renderContent = () => {
-    switch (appState) {
-      case 'home':
-        return (
-          <HomePage 
-            onCreateGame={() => handleCreateGame()} // Nama host bisa dibuat dinamis jika perlu
-            onJoinGame={() => setAppState('join')}
-          />
-        );
-      case 'join':
-        return (
-          <JoinGame 
-            onBack={handleBack}
-            onJoin={handleJoinGame}
-            error={joinError}
-          />
-        );
-      case 'lobby':
-        // Cek apakah currentRoomCode sudah ada sebelum merender GameLobby
-        if (!currentRoomCode) return <div>Loading...</div>;
-        return (
-          <GameLobby 
-            players={players}
-            currentPlayer={currentPlayer}
-            roomCode={currentRoomCode}
-            onStartGame={handleStartGame}
-            onToggleReady={handleToggleReady} // Disesuaikan
-            onRemovePlayer={handleRemovePlayer}
-          />
-        );
-      case 'game':
-        return (
-          <GameRoom 
-            players={players}
-            currentPlayer={currentPlayer}
-            gameState={gameState}
-            chatMessages={chatMessages}
-            onVote={handleVote}
-            onUseAbility={handleUseAbility}
-            onSendMessage={handleSendMessage}
-            onEndGame={handleEndGame}
-          />
-        );
-      default:
-        return (
-          <HomePage 
-            onCreateGame={() => handleCreateGame()}
-            onJoinGame={() => setAppState('join')}
-          />
-        );
+  const handleRemovePlayer = (playerId: string) => {
+    const playerToRemove = players.find(p => p.id === playerId);
+    if (playerToRemove) {
+      removePlayer(playerId);
+      addChatMessage('System', `${playerToRemove.name} left the game.`, 'system');
     }
   };
 
   return (
     <div className="min-h-screen">
-      {renderContent()}
+      {currentState === 'home' && (
+        <HomePage 
+          onCreateGame={handleCreateGame}
+          onJoinGame={() => setCurrentState('join')}
+        />
+      )}
+      
+      {currentState === 'join' && (
+        <JoinGame 
+          onBack={handleBack}
+          onJoin={handleJoinGame}
+          error={joinError}
+        />
+      )}
+      
+      {currentState === 'lobby' && (
+        <GameLobby 
+          players={players}
+          currentPlayer={currentPlayer}
+          roomCode={currentRoomCode}
+          onStartGame={handleStartGame}
+          onToggleReady={handleToggleReady}
+          onRemovePlayer={handleRemovePlayer}
+        />
+      )}
+      
+      {currentState === 'game' && (
+        <GameRoom 
+          players={players}
+          currentPlayer={currentPlayer}
+          gameState={gameState}
+          chatMessages={chatMessages}
+          onVote={handleVote}
+          onUseAbility={handleUseAbility}
+          onSendMessage={handleSendMessage}
+          onEndGame={handleEndGame}
+        />
+      )}
     </div>
   );
 }
