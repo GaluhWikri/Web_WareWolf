@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { Player, GameState, ChatMessage, GameSettings } from '../types/game';
 import GameService from '../services/gameService';
 
+
 export function useGameState() {
   const [currentRoomCode, setCurrentRoomCode] = useState<string>('');
   const [players, setPlayers] = useState<Player[]>([]);

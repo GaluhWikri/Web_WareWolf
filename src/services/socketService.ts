@@ -18,11 +18,7 @@ class SocketService {
       const url =
         serverUrl ||
         (process.env.NODE_ENV === "production"
-<<<<<<< HEAD
-          ? "http://13.55.6.96:3001"
-=======
           ? "wss://13.55.6.96/socket.io"
->>>>>>> 743418c3429bf5210c6da439506f39cb6cf2f5fa
           : "http://localhost:3001");
 
       this.socket = io(url, {
