@@ -18,7 +18,7 @@ class SocketService {
       const url =
         serverUrl ||
         (process.env.NODE_ENV === "production"
-          ? "https://webwarewolf-production.up.railway.app/"
+          ? "webwarewolf-production.up.railway.app"
           : "http://localhost:3001");
 
       this.socket = io(url, {

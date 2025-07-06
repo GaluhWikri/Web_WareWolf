@@ -1,17 +1,17 @@
-import React, { useState } from 'react';
-import HomePage from './components/HomePage';
-import JoinGame from './components/JoinGame';
-import GameLobby from './components/GameLobby';
-import GameRoom from './components/GameRoom';
-import { useGameState } from './hooks/useGameState';
-import { GameSettings } from './types/game';
+import React, { useState } from "react";
+import HomePage from "./components/HomePage";
+import JoinGame from "./components/JoinGame";
+import GameLobby from "./components/GameLobby";
+import GameRoom from "./components/GameRoom";
+import { useGameState } from "./hooks/useGameState";
+import { GameSettings } from "./types/game";
 
-type AppState = 'home' | 'join' | 'lobby' | 'game';
+type AppState = "home" | "join" | "lobby" | "game";
 
 function App() {
-  const [appState, setAppState] = useState<AppState>('home');
-  const [joinError, setJoinError] = useState<string>('');
-  
+  const [appState, setAppState] = useState<AppState>("home");
+  const [joinError, setJoinError] = useState<string>("");
+
   // Menggunakan hook useGameState yang sudah diperbarui
   const {
     players,
@@ -29,10 +29,10 @@ function App() {
     useNightAbility,
   } = useGameState();
 
-  const handleCreateGame = async (playerName: string = 'Host') => {
+  const handleCreateGame = async (playerName: string = "Host") => {
     const { success, error } = await createRoom(playerName);
     if (success) {
-      setAppState('lobby');
+      setAppState("lobby");
     } else {
       // Handle error jika pembuatan room gagal
       console.error("Failed to create room:", error);
@@ -40,19 +40,21 @@ function App() {
   };
 
   const handleJoinGame = async (playerName: string, roomCode: string) => {
-    setJoinError('');
+    setJoinError("");
     const { success, error } = await joinRoom(roomCode, playerName);
-    
+
     if (success) {
-      setAppState('lobby');
+      setAppState("lobby");
     } else {
-      setJoinError(error || 'Failed to join room. Please check the code and player name.');
+      setJoinError(
+        error || "Failed to join room. Please check the code and player name."
+      );
     }
   };
 
   const handleStartGame = (settings: GameSettings) => {
     startGame(settings);
-    setAppState('game');
+    setAppState("game");
   };
 
   const handleVote = (targetId: string) => {
@@ -69,47 +71,49 @@ function App() {
 
   const handleEndGame = () => {
     leaveRoom();
-    setAppState('home');
+    setAppState("home");
   };
 
   const handleBack = () => {
-    setAppState('home');
-    setJoinError('');
+    setAppState("home");
+    setJoinError("");
   };
 
   const handleToggleReady = () => {
     togglePlayerReady();
   };
-  
+
   // CATATAN: Fungsi remove player oleh host belum diimplementasikan di server
   // Anda perlu menambahkan event 'remove-player' di server.js
   const handleRemovePlayer = (playerId: string) => {
-    console.warn(`Fungsi remove-player untuk ${playerId} belum diimplementasikan di backend.`);
+    console.warn(
+      `Fungsi remove-player untuk ${playerId} belum diimplementasikan di backend.`
+    );
     // Logika untuk emit 'remove-player' ke server akan ditambahkan di sini
   };
 
   const renderContent = () => {
     switch (appState) {
-      case 'home':
+      case "home":
         return (
-          <HomePage 
+          <HomePage
             onCreateGame={() => handleCreateGame()} // Nama host bisa dibuat dinamis jika perlu
-            onJoinGame={() => setAppState('join')}
+            onJoinGame={() => setAppState("join")}
           />
         );
-      case 'join':
+      case "join":
         return (
-          <JoinGame 
+          <JoinGame
             onBack={handleBack}
             onJoin={handleJoinGame}
             error={joinError}
           />
         );
-      case 'lobby':
+      case "lobby":
         // Cek apakah currentRoomCode sudah ada sebelum merender GameLobby
         if (!currentRoomCode) return <div>Loading...</div>;
         return (
-          <GameLobby 
+          <GameLobby
             players={players}
             currentPlayer={currentPlayer}
             roomCode={currentRoomCode}
@@ -118,9 +122,9 @@ function App() {
             onRemovePlayer={handleRemovePlayer}
           />
         );
-      case 'game':
+      case "game":
         return (
-          <GameRoom 
+          <GameRoom
             players={players}
             currentPlayer={currentPlayer}
             gameState={gameState}
@@ -133,19 +137,15 @@ function App() {
         );
       default:
         return (
-          <HomePage 
+          <HomePage
             onCreateGame={() => handleCreateGame()}
-            onJoinGame={() => setAppState('join')}
+            onJoinGame={() => setAppState("join")}
           />
         );
     }
   };
 
-  return (
-    <div className="min-h-screen">
-      {renderContent()}
-    </div>
-  );
+  return <div className="min-h-screen">{renderContent()}</div>;
 }
 
 export default App;
