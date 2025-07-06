@@ -18,7 +18,7 @@ class SocketService {
       const url =
         serverUrl ||
         (process.env.NODE_ENV === "production"
-          ? "wss://stryde.my.id/socket.io"
+          ? "wss://13.55.6.96/socket.io"
           : "http://localhost:3001");
 
       this.socket = io(url, {
