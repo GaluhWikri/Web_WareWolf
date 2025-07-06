@@ -1,32 +1,20 @@
-# Use Node.js LTS version
+# Gunakan base image Node.js versi 18 yang ringan
 FROM node:18-alpine
 
-# Set working directory
+# Tentukan direktori kerja di dalam container
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+# Salin file package.json dan package-lock.json dari folder server
+COPY server/package*.json ./
 
-# Install dependencies
+# Install dependensi produksi secara efisien
 RUN npm ci --only=production
 
-# Copy source code
-COPY . .
+# Salin sisa file aplikasi dari folder server
+COPY server/ .
 
-# Create non-root user
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S nodejs -u 1001
-
-# Change ownership
-RUN chown -R nodejs:nodejs /app
-USER nodejs
-
-# Expose port
+# Expose port yang digunakan oleh server Anda
 EXPOSE 3001
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node healthcheck.js
-
-# Start server
+# Perintah untuk menjalankan aplikasi saat container dimulai
 CMD ["npm", "start"]
