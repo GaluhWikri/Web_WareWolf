@@ -2,12 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { Users, Settings, Play, Copy, Crown, Check, X } from 'lucide-react';
 import { Player, GameSettings } from '../types/game';
 
+// 1. Perbaiki tipe properti onToggleReady
 interface GameLobbyProps {
   players: Player[];
   currentPlayer: Player | null;
   roomCode: string;
   onStartGame: (settings: GameSettings) => void;
-  onToggleReady: (playerId: string) => void;
+  onToggleReady: () => void; // Tidak lagi memerlukan playerId
   onRemovePlayer: (playerId: string) => void;
 }
 
@@ -24,8 +25,8 @@ export default function GameLobby({
     villagers: 4,
     seer: 1,
     doctor: 1,
-    dayDuration: 300,
-    nightDuration: 120
+    dayDuration: 20,
+    nightDuration: 20
   });
 
   const [copySuccess, setCopySuccess] = useState(false);
@@ -143,9 +144,10 @@ export default function GameLobby({
                             </>
                           )}
                         </span>
+                        {/* 2. Perbaiki cara memanggil onToggleReady */}
                         {player.id === currentPlayer?.id && (
                           <button
-                            onClick={() => onToggleReady(player.id)}
+                            onClick={onToggleReady}
                             className="text-blue-400 hover:text-blue-300 text-sm px-2 py-1 rounded bg-blue-500/20 hover:bg-blue-500/30 transition-colors"
                           >
                             Toggle

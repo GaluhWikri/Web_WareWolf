@@ -1,4 +1,6 @@
-import React, { useState } from "react";
+// src/App.tsx
+
+import React, { useState, useEffect } from "react"; // 1. Import useEffect
 import HomePage from "./components/HomePage";
 import JoinGame from "./components/JoinGame";
 import GameLobby from "./components/GameLobby";
@@ -12,29 +14,41 @@ function App() {
   const [appState, setAppState] = useState<AppState>("home");
   const [joinError, setJoinError] = useState<string>("");
 
-  // Menggunakan hook useGameState yang sudah diperbarui
   const {
     players,
     currentPlayer,
     gameState,
     chatMessages,
     currentRoomCode,
-    createRoom, // Menggantikan addPlayer untuk host
+    createRoom,
     joinRoom,
     leaveRoom,
-    togglePlayerReady, // Sekarang tidak perlu argumen
-    startGame, // Menggantikan assignRoles
-    addChatMessage, // Sekarang hanya perlu 1 argumen
+    togglePlayerReady,
+    startGame,
+    addChatMessage,
     voteForPlayer,
     useNightAbility,
   } = useGameState();
+
+  // 2. Tambahkan useEffect untuk mengawasi perubahan fase permainan
+  useEffect(() => {
+    // Jika fase permainan bukan lagi 'lobby' dan kita sedang dalam lobi, pindah ke permainan
+    if (gameState.phase !== 'lobby' && appState === 'lobby') {
+      setAppState('game');
+    }
+    // Jika fase permainan kembali ke 'lobby' (misalnya setelah game berakhir), kembali ke lobi
+    if (gameState.phase === 'lobby' && appState === 'game') {
+        // Ini opsional, tergantung alur permainan yang Anda inginkan setelah selesai
+        setAppState('lobby');
+    }
+  }, [gameState.phase, appState]);
+
 
   const handleCreateGame = async (playerName: string = "Host") => {
     const { success, error } = await createRoom(playerName);
     if (success) {
       setAppState("lobby");
     } else {
-      // Handle error jika pembuatan room gagal
       console.error("Failed to create room:", error);
     }
   };
@@ -52,9 +66,10 @@ function App() {
     }
   };
 
+  // 3. Hapus perubahan state lokal dari handleStartGame
   const handleStartGame = (settings: GameSettings) => {
     startGame(settings);
-    setAppState("game");
+    // setAppState("game"); // HAPUS BARIS INI
   };
 
   const handleVote = (targetId: string) => {
@@ -80,16 +95,23 @@ function App() {
   };
 
   const handleToggleReady = () => {
-    togglePlayerReady();
+    if (currentPlayer) {
+        // Memastikan onToggleReady di GameLobby tidak memerlukan argumen
+        togglePlayerReady();
+    }
+  };
+  
+  // Mengubah handleToggleReady di App.tsx agar sesuai dengan pemanggilan dari GameLobby
+  const handlePlayerToggleReady = () => {
+    if (currentPlayer) {
+      togglePlayerReady();
+    }
   };
 
-  // CATATAN: Fungsi remove player oleh host belum diimplementasikan di server
-  // Anda perlu menambahkan event 'remove-player' di server.js
   const handleRemovePlayer = (playerId: string) => {
     console.warn(
       `Fungsi remove-player untuk ${playerId} belum diimplementasikan di backend.`
     );
-    // Logika untuk emit 'remove-player' ke server akan ditambahkan di sini
   };
 
   const renderContent = () => {
@@ -97,7 +119,7 @@ function App() {
       case "home":
         return (
           <HomePage
-            onCreateGame={() => handleCreateGame()} // Nama host bisa dibuat dinamis jika perlu
+            onCreateGame={() => handleCreateGame()}
             onJoinGame={() => setAppState("join")}
           />
         );
@@ -110,7 +132,6 @@ function App() {
           />
         );
       case "lobby":
-        // Cek apakah currentRoomCode sudah ada sebelum merender GameLobby
         if (!currentRoomCode) return <div>Loading...</div>;
         return (
           <GameLobby
@@ -118,7 +139,8 @@ function App() {
             currentPlayer={currentPlayer}
             roomCode={currentRoomCode}
             onStartGame={handleStartGame}
-            onToggleReady={handleToggleReady} // Disesuaikan
+            // Menggunakan fungsi yang telah disesuaikan
+            onToggleReady={handlePlayerToggleReady}
             onRemovePlayer={handleRemovePlayer}
           />
         );

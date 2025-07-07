@@ -10,10 +10,10 @@ require('dotenv').config();
 const app = express();
 const server = http.createServer(app);
 
-// CORS configuration for production
+// Konfigurasi CORS
 const corsOptions = {
   origin: process.env.NODE_ENV === 'production' 
-    ? ['https://web-warewolf.vercel.app']
+    ? ['https://web-warewolf.vercel.app'] // Ganti dengan URL frontend production Anda
     : ['http://localhost:5173', 'http://localhost:3000'],
   credentials: true
 };
@@ -24,209 +24,280 @@ app.use(compression());
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// Socket.IO setup
+// Pengaturan Socket.IO
 const io = socketIo(server, {
   cors: corsOptions,
   pingTimeout: 60000,
   pingInterval: 25000
 });
 
-// In-memory storage (use Redis in production)
+// Penyimpanan dalam memori
 const gameRooms = new Map();
-const playerSockets = new Map(); // playerId -> socketId mapping
+const playerSockets = new Map();
 
-// Utility functions
-function generateRoomCode() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let result = '';
-  for (let i = 0; i < 6; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
+// ===============================================
+// MESIN PERMAINAN & GAME LOOP
+// ===============================================
+
+const gameLoopIntervals = new Map();
+
+function startGameLoop(roomCode) {
+  if (gameLoopIntervals.has(roomCode)) {
+    clearInterval(gameLoopIntervals.get(roomCode));
   }
-  return gameRooms.has(result) ? generateRoomCode() : result;
+
+  const loop = setInterval(() => {
+    const room = gameRooms.get(roomCode);
+    if (!room || room.gameState.winner) {
+      clearInterval(loop);
+      gameLoopIntervals.delete(roomCode);
+      return;
+    }
+
+    if (room.gameState.timeRemaining > 0) {
+      room.gameState.timeRemaining--;
+    }
+
+    // Hanya broadcast jika ada perubahan waktu, untuk efisiensi
+    if (room.gameState.timeRemaining > 0) {
+        broadcastToRoom(roomCode, 'room-update', room);
+    } else {
+        advanceGamePhase(roomCode);
+    }
+  }, 1000);
+
+  gameLoopIntervals.set(roomCode, loop);
 }
 
+function advanceGamePhase(roomCode) {
+  const room = gameRooms.get(roomCode);
+  if (!room || room.gameState.winner) return;
+
+  // Proses hasil dari fase sebelumnya
+  switch (room.gameState.phase) {
+    case 'voting':
+      processVotes(roomCode);
+      break;
+    case 'night':
+      processNightActions(roomCode);
+      break;
+  }
+  
+  // Periksa kondisi kemenangan setelah memproses fase
+  if (checkWinConditions(roomCode)) return;
+
+  // Pindah ke fase berikutnya
+  switch (room.gameState.phase) {
+    case 'day':
+      room.gameState.phase = 'voting';
+      room.gameState.timeRemaining = 45; // Waktu voting
+      addChatMessage(roomCode, 'Narrator', 'Waktu vote dimulai! Pilih siapa yang akan dieliminasi.', 'system');
+      break;
+    case 'voting':
+      room.gameState.phase = 'night';
+      room.gameState.timeRemaining = room.settings.nightDuration;
+      room.gameState.dayCount++;
+      room.players.forEach(p => { p.hasUsedAbility = false; p.votedFor = undefined; });
+      addChatMessage(roomCode, 'Narrator', `Malam telah tiba untuk hari ke-${room.gameState.dayCount}.`, 'system');
+      break;
+    case 'night':
+      room.gameState.phase = 'day';
+      room.gameState.timeRemaining = room.settings.dayDuration;
+      addChatMessage(roomCode, 'Narrator', 'Matahari terbit. Diskusikan apa yang terjadi semalam.', 'system');
+      break;
+    default:
+      room.gameState.phase = 'day';
+      room.gameState.timeRemaining = room.settings.dayDuration;
+      break;
+  }
+
+  broadcastToRoom(roomCode, 'room-update', room);
+}
+
+function processVotes(roomCode) {
+    const room = gameRooms.get(roomCode);
+    if (!room) return;
+    const voteCounts = new Map();
+    room.players.forEach(p => {
+        if (p.isAlive && p.votedFor) {
+            voteCounts.set(p.votedFor, (voteCounts.get(p.votedFor) || 0) + 1);
+        }
+    });
+
+    let maxVotes = 0;
+    let eliminatedPlayerId = null;
+    let isTie = false;
+
+    for (const [playerId, count] of voteCounts.entries()) {
+        if (count > maxVotes) {
+            maxVotes = count;
+            eliminatedPlayerId = playerId;
+            isTie = false;
+        } else if (count === maxVotes && maxVotes > 0) {
+            isTie = true;
+        }
+    }
+
+    if (eliminatedPlayerId && !isTie) {
+        const eliminatedPlayer = room.players.find(p => p.id === eliminatedPlayerId);
+        if (eliminatedPlayer) {
+            eliminatedPlayer.isAlive = false;
+            addChatMessage(roomCode, 'Narrator', `${eliminatedPlayer.name} telah dieliminasi oleh warga. Dia adalah seorang ${eliminatedPlayer.role}.`, 'system');
+        }
+    } else {
+        addChatMessage(roomCode, 'Narrator', 'Voting berakhir seri. Tidak ada yang dieliminasi hari ini.', 'system');
+    }
+}
+
+function processNightActions(roomCode) {
+    const room = gameRooms.get(roomCode);
+    if (!room) return;
+    const { werewolf, doctor } = room.gameState.nightActions;
+
+    if (werewolf && werewolf !== doctor) {
+        const targetPlayer = room.players.find(p => p.id === werewolf);
+        if (targetPlayer) {
+            targetPlayer.isAlive = false;
+            addChatMessage(roomCode, 'Narrator', `Malam ini, ${targetPlayer.name} telah menjadi korban serangan werewolf!`, 'system');
+        }
+    } else if (werewolf && werewolf === doctor) {
+        addChatMessage(roomCode, 'Narrator', 'Dokter berhasil menyelamatkan target serangan werewolf malam ini!', 'system');
+    } else {
+        addChatMessage(roomCode, 'Narrator', 'Malam ini berlalu dengan tenang, tidak ada serangan.', 'system');
+    }
+    
+    room.gameState.nightActions = {};
+}
+
+function checkWinConditions(roomCode) {
+    const room = gameRooms.get(roomCode);
+    if (!room) return false;
+    const alivePlayers = room.players.filter(p => p.isAlive);
+    const werewolfCount = alivePlayers.filter(p => p.role === 'werewolf').length;
+    const villagerCount = alivePlayers.length - werewolfCount;
+
+    let winner = null;
+    if (werewolfCount === 0) {
+        winner = 'villagers';
+    } else if (werewolfCount >= villagerCount) {
+        winner = 'werewolves';
+    }
+
+    if (winner) {
+        room.gameState.winner = winner;
+        if (gameLoopIntervals.has(roomCode)) {
+            clearInterval(gameLoopIntervals.get(roomCode));
+            gameLoopIntervals.delete(roomCode);
+        }
+        addChatMessage(roomCode, 'Narrator', `Permainan berakhir! ${winner.charAt(0).toUpperCase() + winner.slice(1)} menang!`, 'system');
+        broadcastToRoom(roomCode, 'room-update', room);
+        return true;
+    }
+    return false;
+}
+
+// Fungsi Utilitas
 function createGameRoom(hostPlayer) {
   const roomCode = generateRoomCode();
   const room = {
     code: roomCode,
     host: hostPlayer.id,
     players: [hostPlayer],
-    gameState: {
-      phase: 'lobby',
-      dayCount: 1,
-      timeRemaining: 300,
-      nightActions: {}
-    },
-    chatMessages: [
-      {
-        id: uuidv4(),
-        player: 'Narrator',
-        message: `Welcome to room ${roomCode}! Share this code with friends to join.`,
-        type: 'system',
-        timestamp: Date.now()
-      }
-    ],
+    gameState: { phase: 'lobby', dayCount: 1, timeRemaining: 0, nightActions: {} },
+    chatMessages: [{ id: uuidv4(), player: 'Narrator', message: `Welcome to room ${roomCode}! Share with friends.`, type: 'system', timestamp: Date.now() }],
     settings: {
-      werewolves: 2,
-      villagers: 4,
-      seer: 1,
-      doctor: 1,
-      dayDuration: 300,
-      nightDuration: 120
+      werewolves: 2, villagers: 4, seer: 1, doctor: 1,
+      dayDuration: 20, 
+      nightDuration: 20  
     },
     createdAt: Date.now(),
     lastActivity: Date.now()
   };
-  
   gameRooms.set(roomCode, room);
   return room;
 }
 
-function broadcastToRoom(roomCode, event, data) {
-  io.to(roomCode).emit(event, data);
-}
-
-function addChatMessage(roomCode, player, message, type = 'player') {
+function addChatMessage(roomCode, playerName, message, type = 'player') {
   const room = gameRooms.get(roomCode);
   if (!room) return;
-
-  const newMessage = {
-    id: uuidv4(),
-    player,
-    message,
-    type,
-    timestamp: Date.now()
-  };
-
+  const newMessage = { id: uuidv4(), player: playerName, message, type, timestamp: Date.now() };
   room.chatMessages.push(newMessage);
   room.lastActivity = Date.now();
-  
-  broadcastToRoom(roomCode, 'chat-message', newMessage);
-  broadcastToRoom(roomCode, 'room-update', room);
+  broadcastToRoom(roomCode, 'room-update', room); // Kirim update ruangan lengkap
 }
 
-// Socket.IO event handlers
+function broadcastToRoom(roomCode, event, data) {
+    io.to(roomCode).emit(event, data);
+}
+
+function generateRoomCode() {
+    const chars = 'ABCDEFGHIJKLMNPQRSTUVWXYZ123456789';
+    let result = '';
+    for (let i = 0; i < 6; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return gameRooms.has(result) ? generateRoomCode() : result;
+}
+
+// Event Handler Socket.IO
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
-  // Create game room
   socket.on('create-room', (playerData, callback) => {
     try {
-      const player = {
-        id: uuidv4(),
-        name: playerData.name,
-        role: 'villager',
-        isAlive: true,
-        isHost: true,
-        isReady: false,
-        votes: 0
-      };
-
-      const room = createGameRoom(player);
-      
-      // Join socket room
-      socket.join(room.code);
-      playerSockets.set(player.id, socket.id);
-      
-      console.log(`Room created: ${room.code} by ${player.name}`);
-      
-      callback({
-        success: true,
-        roomCode: room.code,
-        player: player,
-        room: room
-      });
+        const player = { id: uuidv4(), name: playerData.name, role: 'villager', isAlive: true, isHost: true, isReady: false, votes: 0 };
+        const room = createGameRoom(player);
+        socket.join(room.code);
+        playerSockets.set(player.id, socket.id);
+        callback({ success: true, roomCode: room.code, player: player, room: room });
     } catch (error) {
-      console.error('Error creating room:', error);
-      callback({ success: false, error: 'Failed to create room' });
+        callback({ success: false, error: 'Failed to create room' });
     }
   });
 
-  // Join existing room
   socket.on('join-room', (data, callback) => {
     try {
-      const { roomCode, playerName } = data;
-      const room = gameRooms.get(roomCode);
-
-      if (!room) {
-        return callback({ success: false, error: 'Room not found' });
-      }
-
-      if (room.players.length >= 12) {
-        return callback({ success: false, error: 'Room is full' });
-      }
-
-      if (room.players.some(p => p.name.toLowerCase() === playerName.toLowerCase())) {
-        return callback({ success: false, error: 'Name already taken' });
-      }
-
-      if (room.gameState.phase !== 'lobby') {
-        return callback({ success: false, error: 'Game already started' });
-      }
-
-      const player = {
-        id: uuidv4(),
-        name: playerName,
-        role: 'villager',
-        isAlive: true,
-        isHost: false,
-        isReady: false,
-        votes: 0
-      };
-
-      room.players.push(player);
-      room.lastActivity = Date.now();
-      
-      // Join socket room
-      socket.join(roomCode);
-      playerSockets.set(player.id, socket.id);
-
-      console.log(`${playerName} joined room: ${roomCode}`);
-
-      // Notify all players in room
-      addChatMessage(roomCode, 'System', `${playerName} joined the game!`, 'system');
-      
-      callback({
-        success: true,
-        player: player,
-        room: room
-      });
+        const { roomCode, playerName } = data;
+        const room = gameRooms.get(roomCode);
+        if (!room) return callback({ success: false, error: 'Room not found' });
+        if (room.players.length >= 12) return callback({ success: false, error: 'Room is full' });
+        if (room.players.some(p => p.name.toLowerCase() === playerName.toLowerCase())) return callback({ success: false, error: 'Name already taken' });
+        if (room.gameState.phase !== 'lobby') return callback({ success: false, error: 'Game already started' });
+        
+        const player = { id: uuidv4(), name: playerName, role: 'villager', isAlive: true, isHost: false, isReady: false, votes: 0 };
+        room.players.push(player);
+        socket.join(roomCode);
+        playerSockets.set(player.id, socket.id);
+        addChatMessage(roomCode, 'System', `${playerName} joined the game!`, 'system');
+        callback({ success: true, player: player, room: room });
     } catch (error) {
-      console.error('Error joining room:', error);
-      callback({ success: false, error: 'Failed to join room' });
+        callback({ success: false, error: 'Failed to join room' });
     }
   });
 
-  // Player ready toggle
   socket.on('toggle-ready', (data) => {
     const { roomCode, playerId } = data;
     const room = gameRooms.get(roomCode);
-    
     if (room) {
       const player = room.players.find(p => p.id === playerId);
       if (player) {
         player.isReady = !player.isReady;
-        room.lastActivity = Date.now();
         broadcastToRoom(roomCode, 'room-update', room);
       }
     }
   });
 
-  // Start game
   socket.on('start-game', (data) => {
     const { roomCode, settings } = data;
     const room = gameRooms.get(roomCode);
-    
     if (!room) return;
 
-    // Assign roles
     const roles = [];
     for (let i = 0; i < settings.werewolves; i++) roles.push('werewolf');
     for (let i = 0; i < settings.seer; i++) roles.push('seer');
     for (let i = 0; i < settings.doctor; i++) roles.push('doctor');
     for (let i = 0; i < settings.villagers; i++) roles.push('villager');
     
-    // Shuffle roles
     for (let i = roles.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [roles[i], roles[j]] = [roles[j], roles[i]];
@@ -234,197 +305,92 @@ io.on('connection', (socket) => {
     
     room.players.forEach((player, index) => {
       player.role = roles[index] || 'villager';
-      player.hasUsedAbility = false;
     });
 
-    room.gameState = {
-      phase: 'day',
-      dayCount: 1,
-      timeRemaining: settings.dayDuration,
-      nightActions: {}
-    };
+    room.settings = settings; // Terapkan settings dari host
+    room.gameState.phase = 'day';
+    room.gameState.timeRemaining = room.settings.dayDuration;
     
-    room.settings = settings;
-    room.lastActivity = Date.now();
-
-    addChatMessage(roomCode, 'Narrator', 'Roles have been assigned! The game begins now.', 'system');
-    
-    console.log(`Game started in room: ${roomCode}`);
+    addChatMessage(roomCode, 'Narrator', 'Peran telah dibagikan! Permainan dimulai.', 'system');
+    startGameLoop(roomCode);
   });
-
-  // Chat message
+  
   socket.on('send-message', (data) => {
     const { roomCode, playerId, message, type } = data;
     const room = gameRooms.get(roomCode);
-    
     if (room) {
-      const player = room.players.find(p => p.id === playerId);
-      if (player && player.isAlive) {
-        addChatMessage(roomCode, player.name, message, type || 'player');
-      }
+        const player = room.players.find(p => p.id === playerId);
+        if (player && player.isAlive) {
+            addChatMessage(roomCode, player.name, message, type || 'player');
+        }
     }
   });
 
-  // Vote for player
   socket.on('vote-player', (data) => {
     const { roomCode, voterId, targetId } = data;
     const room = gameRooms.get(roomCode);
-    
     if (room && room.gameState.phase === 'voting') {
       const voter = room.players.find(p => p.id === voterId);
       if (voter && voter.isAlive) {
         voter.votedFor = voter.votedFor === targetId ? undefined : targetId;
-        room.lastActivity = Date.now();
         broadcastToRoom(roomCode, 'room-update', room);
       }
     }
   });
 
-  // Use night ability
   socket.on('use-ability', (data) => {
     const { roomCode, playerId, targetId, ability } = data;
     const room = gameRooms.get(roomCode);
-    
     if (room && room.gameState.phase === 'night') {
       const player = room.players.find(p => p.id === playerId);
       if (player && player.isAlive && !player.hasUsedAbility) {
         player.hasUsedAbility = true;
-        room.gameState.nightActions[`${ability}Target`] = targetId;
-        room.lastActivity = Date.now();
-        
+        room.gameState.nightActions[ability] = targetId;
         if (ability === 'seer') {
           const target = room.players.find(p => p.id === targetId);
           if (target) {
-            socket.emit('seer-result', {
-              targetName: target.name,
-              targetRole: target.role
-            });
+            socket.emit('seer-result', { targetName: target.name, targetRole: target.role });
           }
         }
-        
-        broadcastToRoom(roomCode, 'room-update', room);
       }
     }
   });
-
-  // Leave room
-  socket.on('leave-room', (data) => {
-    const { roomCode, playerId } = data;
-    const room = gameRooms.get(roomCode);
-    
-    if (room) {
-      const playerIndex = room.players.findIndex(p => p.id === playerId);
-      if (playerIndex !== -1) {
-        const player = room.players[playerIndex];
-        room.players.splice(playerIndex, 1);
-        
-        // Remove from socket mapping
-        playerSockets.delete(playerId);
-        socket.leave(roomCode);
-        
-        // Transfer host if needed
-        if (room.host === playerId && room.players.length > 0) {
-          room.host = room.players[0].id;
-          room.players[0].isHost = true;
-          addChatMessage(roomCode, 'System', `${room.players[0].name} is now the host.`, 'system');
-        }
-        
-        // Delete room if empty
-        if (room.players.length === 0) {
-          gameRooms.delete(roomCode);
-          console.log(`Room deleted: ${roomCode}`);
-        } else {
-          addChatMessage(roomCode, 'System', `${player.name} left the game.`, 'system');
-        }
-      }
-    }
-  });
-
-  // Handle disconnect
+  
   socket.on('disconnect', () => {
     console.log(`User disconnected: ${socket.id}`);
-    
-    // Find and remove player from any room
     for (const [playerId, socketId] of playerSockets) {
       if (socketId === socket.id) {
-        // Find room containing this player
+        playerSockets.delete(playerId);
         for (const [roomCode, room] of gameRooms) {
           const playerIndex = room.players.findIndex(p => p.id === playerId);
           if (playerIndex !== -1) {
             const player = room.players[playerIndex];
             room.players.splice(playerIndex, 1);
-            
-            // Transfer host if needed
-            if (room.host === playerId && room.players.length > 0) {
-              room.host = room.players[0].id;
-              room.players[0].isHost = true;
-              addChatMessage(roomCode, 'System', `${room.players[0].name} is now the host.`, 'system');
-            }
-            
-            // Delete room if empty
             if (room.players.length === 0) {
-              gameRooms.delete(roomCode);
-              console.log(`Room deleted: ${roomCode}`);
+                gameRooms.delete(roomCode);
+                if (gameLoopIntervals.has(roomCode)) {
+                    clearInterval(gameLoopIntervals.get(roomCode));
+                    gameLoopIntervals.delete(roomCode);
+                }
             } else {
-              addChatMessage(roomCode, 'System', `${player.name} disconnected.`, 'system');
+                if (room.host === playerId) {
+                    room.host = room.players[0].id;
+                    room.players[0].isHost = true;
+                    addChatMessage(roomCode, 'System', `${player.name} disconnected. ${room.players[0].name} is now the host.`, 'system');
+                } else {
+                    addChatMessage(roomCode, 'System', `${player.name} disconnected.`, 'system');
+                }
             }
             break;
           }
         }
-        playerSockets.delete(playerId);
         break;
       }
     }
   });
 });
 
-// REST API endpoints
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    timestamp: new Date().toISOString(),
-    rooms: gameRooms.size,
-    players: playerSockets.size
-  });
-});
-
-app.get('/stats', (req, res) => {
-  res.json({
-    totalRooms: gameRooms.size,
-    totalPlayers: playerSockets.size,
-    rooms: Array.from(gameRooms.values()).map(room => ({
-      code: room.code,
-      playerCount: room.players.length,
-      phase: room.gameState.phase,
-      createdAt: room.createdAt
-    }))
-  });
-});
-
-// Cleanup old rooms every 30 minutes
-setInterval(() => {
-  const now = Date.now();
-  const maxAge = 2 * 60 * 60 * 1000; // 2 hours
-  
-  for (const [code, room] of gameRooms) {
-    if (now - room.lastActivity > maxAge) {
-      gameRooms.delete(code);
-      console.log(`Cleaned up old room: ${code}`);
-    }
-  }
-}, 30 * 60 * 1000);
-
-// Start server
+// Endpoint dan Server
+app.get('/health', (req, res) => res.json({ status: 'OK' }));
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
-  console.log(`🚀 Werewolf Server running on port ${PORT}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  server.close(() => {
-    console.log('Process terminated');
-  });
-});
+server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
